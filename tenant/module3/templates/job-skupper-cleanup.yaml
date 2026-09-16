@@ -2,6 +2,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: skupper-cleanup-{{ .Values.tenant.username }}
+  # No namespace - inherits .Release.Namespace
   labels:
     {{- include "user-workload.labels" . | nindent 4 }}
   annotations:
@@ -19,20 +20,120 @@ spec:
           type: RuntimeDefault
       containers:
         - name: skupper-cleanup
-          image: quay.io/agnosticd/ee-multicloud:latest
-          command:
-            - /bin/bash
-            - -c
-            - ansible-playbook /scripts/playbook.yaml
+          image: registry.redhat.io/openshift4/ose-tools-rhel9:latest
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
               drop:
                 - ALL
-          volumeMounts:
-            - name: scripts
-              mountPath: /scripts
-      volumes:
-        - name: scripts
-          configMap:
-            name: {{ include "user-workload.name" . }}-skupper-cleanup
+          env:
+            - name: SHARED_DB_NS
+              value: {{ .Values.sharedDatabase.namespace | quote }}
+            - name: OC_USER
+              value: {{ .Values.tenant.openshiftUser | quote }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+
+              SA_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+              KUBE_API="https://kubernetes.default.svc"
+              RESOURCE_NAME="token-${OC_USER}"
+              TENANT_NS="{{ include "user-workload.namespace" . }}"
+
+              echo "Cleaning up Skupper Site in ${TENANT_NS}..."
+
+              # Delete all Sites in the tenant namespace (cascades to router, routes, services)
+              SITES=$(curl -sSk \
+                "$KUBE_API/apis/skupper.io/v2alpha1/namespaces/$TENANT_NS/sites" \
+                -H "Authorization: Bearer $SA_TOKEN" | jq -r '.items[].metadata.name // empty' 2>/dev/null)
+              for SITE in $SITES; do
+                HTTP_CODE=$(curl -sSk -o /dev/null -w "%{http_code}" -X DELETE \
+                  "$KUBE_API/apis/skupper.io/v2alpha1/namespaces/$TENANT_NS/sites/$SITE" \
+                  -H "Authorization: Bearer $SA_TOKEN")
+                if [ "$HTTP_CODE" = "200" ]; then
+                  echo "  Deleted site/${SITE}"
+                else
+                  echo "  WARNING: Failed to delete site/${SITE} (HTTP $HTTP_CODE)"
+                fi
+              done
+              if [ -z "$SITES" ]; then
+                echo "  No Sites found (student may not have created one)"
+              fi
+
+              # Delete all AccessGrants in the tenant namespace
+              GRANTS=$(curl -sSk \
+                "$KUBE_API/apis/skupper.io/v2alpha1/namespaces/$TENANT_NS/accessgrants" \
+                -H "Authorization: Bearer $SA_TOKEN" | jq -r '.items[].metadata.name // empty' 2>/dev/null)
+              for GRANT in $GRANTS; do
+                HTTP_CODE=$(curl -sSk -o /dev/null -w "%{http_code}" -X DELETE \
+                  "$KUBE_API/apis/skupper.io/v2alpha1/namespaces/$TENANT_NS/accessgrants/$GRANT" \
+                  -H "Authorization: Bearer $SA_TOKEN")
+                if [ "$HTTP_CODE" = "200" ]; then
+                  echo "  Deleted accessgrant/${GRANT}"
+                else
+                  echo "  WARNING: Failed to delete accessgrant/${GRANT} (HTTP $HTTP_CODE)"
+                fi
+              done
+              if [ -z "$GRANTS" ]; then
+                echo "  No AccessGrants found (student may not have created one)"
+              fi
+
+              # Delete all Listeners in the tenant namespace
+              LISTENERS=$(curl -sSk \
+                "$KUBE_API/apis/skupper.io/v2alpha1/namespaces/$TENANT_NS/listeners" \
+                -H "Authorization: Bearer $SA_TOKEN" | jq -r '.items[].metadata.name // empty' 2>/dev/null)
+              for LISTENER in $LISTENERS; do
+                HTTP_CODE=$(curl -sSk -o /dev/null -w "%{http_code}" -X DELETE \
+                  "$KUBE_API/apis/skupper.io/v2alpha1/namespaces/$TENANT_NS/listeners/$LISTENER" \
+                  -H "Authorization: Bearer $SA_TOKEN")
+                if [ "$HTTP_CODE" = "200" ]; then
+                  echo "  Deleted listener/${LISTENER}"
+                else
+                  echo "  WARNING: Failed to delete listener/${LISTENER} (HTTP $HTTP_CODE)"
+                fi
+              done
+              if [ -z "$LISTENERS" ]; then
+                echo "  No Listeners found (student may not have created one)"
+              fi
+
+              echo "Cleaning up Skupper resources for ${OC_USER} in ${SHARED_DB_NS}..."
+
+              # Delete Link (if student created one)
+              HTTP_CODE=$(curl -sSk -o /dev/null -w "%{http_code}" -X DELETE \
+                "$KUBE_API/apis/skupper.io/v2alpha1/namespaces/$SHARED_DB_NS/links/$RESOURCE_NAME" \
+                -H "Authorization: Bearer $SA_TOKEN")
+              if [ "$HTTP_CODE" = "200" ]; then
+                echo "  Deleted link/${RESOURCE_NAME}"
+              elif [ "$HTTP_CODE" = "404" ]; then
+                echo "  link/${RESOURCE_NAME} not found (student may not have created it)"
+              else
+                echo "  WARNING: Failed to delete link/${RESOURCE_NAME} (HTTP $HTTP_CODE)"
+              fi
+
+              # Delete AccessToken (if student created one)
+              HTTP_CODE=$(curl -sSk -o /dev/null -w "%{http_code}" -X DELETE \
+                "$KUBE_API/apis/skupper.io/v2alpha1/namespaces/$SHARED_DB_NS/accesstokens/$RESOURCE_NAME" \
+                -H "Authorization: Bearer $SA_TOKEN")
+              if [ "$HTTP_CODE" = "200" ]; then
+                echo "  Deleted accesstoken/${RESOURCE_NAME}"
+              elif [ "$HTTP_CODE" = "404" ]; then
+                echo "  accesstoken/${RESOURCE_NAME} not found (student may not have created it)"
+              else
+                echo "  WARNING: Failed to delete accesstoken/${RESOURCE_NAME} (HTTP $HTTP_CODE)"
+              fi
+
+              # Delete companion Secret (if Skupper controller didn't clean it up)
+              HTTP_CODE=$(curl -sSk -o /dev/null -w "%{http_code}" -X DELETE \
+                "$KUBE_API/api/v1/namespaces/$SHARED_DB_NS/secrets/$RESOURCE_NAME" \
+                -H "Authorization: Bearer $SA_TOKEN")
+              if [ "$HTTP_CODE" = "200" ]; then
+                echo "  Deleted secret/${RESOURCE_NAME}"
+              elif [ "$HTTP_CODE" = "404" ]; then
+                echo "  secret/${RESOURCE_NAME} not found (already cleaned up)"
+              else
+                echo "  WARNING: Failed to delete secret/${RESOURCE_NAME} (HTTP $HTTP_CODE)"
+              fi
+
+              echo "Skupper cleanup complete."

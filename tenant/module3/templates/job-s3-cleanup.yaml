@@ -2,6 +2,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: s3-cleanup-{{ .Values.tenant.username }}
+  namespace: {{ .Values.admin.namespace }}
   labels:
     {{- include "user-workload.labels" . | nindent 4 }}
   annotations:
@@ -19,20 +20,38 @@ spec:
           type: RuntimeDefault
       containers:
         - name: s3-cleanup
-          image: quay.io/agnosticd/ee-multicloud:latest
-          command:
-            - /bin/bash
-            - -c
-            - ansible-playbook /scripts/playbook.yaml
+          image: amazon/aws-cli:latest
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
               drop:
                 - ALL
-          volumeMounts:
-            - name: scripts
-              mountPath: /scripts
-      volumes:
-        - name: scripts
-          configMap:
-            name: {{ include "user-workload.name" . }}-s3-cleanup
+          env:
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: vault-s3
+                  key: accessKey
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: vault-s3
+                  key: secretKey
+            - name: S3_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: vault-s3
+                  key: endpoint
+          command:
+            - /bin/sh
+            - -c
+            - |
+              BUCKET="{{ .Values.tenant.username }}"
+
+              echo "=== S3 cleanup for ${BUCKET} ==="
+
+              echo "Deleting bucket '${BUCKET}' and all contents..."
+              aws --endpoint-url "$S3_ENDPOINT" --no-verify-ssl \
+                s3 rb "s3://${BUCKET}" --force 2>&1 || echo "WARNING: Bucket deletion returned an error (non-fatal)."
+
+              echo "S3 cleanup complete for ${BUCKET}."

@@ -5,37 +5,17 @@ metadata:
   annotations:
     argocd.argoproj.io/sync-wave: "-1"
 rules:
-  # Vault access - for writing credentials
+  # Vault access - for writing credentials via kubectl exec
   - apiGroups: [""]
     resources: ["pods/exec"]
     verbs: ["create"]
   - apiGroups: [""]
     resources: ["pods"]
-    verbs: ["get", "list"]
+    verbs: ["get"]
 
-  # Secrets - for reading admin credentials and NooBaa
-  - apiGroups: [""]
-    resources: ["secrets"]
-    verbs: ["get", "list"]
-
-  # Services - for service discovery
+  # Service discovery for RocketChat AI webhook
   - apiGroups: [""]
     resources: ["services"]
-    verbs: ["get", "list"]
-
-  # Routes - for discovering endpoints
-  - apiGroups: ["route.openshift.io"]
-    resources: ["routes"]
-    verbs: ["get", "list"]
-
-  # Kafka topics - for Kafka operations
-  - apiGroups: ["kafka.strimzi.io"]
-    resources: ["kafkatopics"]
-    verbs: ["get", "list", "create", "update", "patch"]
-
-  # HTTPRoute - for Kuadrant (but we'll template instead of patch)
-  - apiGroups: ["gateway.networking.k8s.io"]
-    resources: ["httproutes"]
     verbs: ["get", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

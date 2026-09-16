@@ -1,7 +1,8 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: helpdesk-cleanup-{{ .Values.tenant.username }}
+  name: hd-cleanup-{{ .Values.tenant.username }}
+  # No namespace - inherits .Release.Namespace
   labels:
     {{- include "user-workload.labels" . | nindent 4 }}
   annotations:
@@ -18,21 +19,56 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       containers:
-        - name: helpdesk-cleanup
-          image: quay.io/agnosticd/ee-multicloud:latest
-          command:
-            - /bin/bash
-            - -c
-            - ansible-playbook /scripts/playbook.yaml
+        - name: hd-cleanup
+          image: registry.redhat.io/openshift4/ose-tools-rhel9:latest
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
               drop:
                 - ALL
-          volumeMounts:
-            - name: scripts
-              mountPath: /scripts
-      volumes:
-        - name: scripts
-          configMap:
-            name: {{ include "user-workload.name" . }}-helpdesk-cleanup
+          command:
+            - /bin/sh
+            - -c
+            - |
+              HD_URL="http://helpdesk.{{ .Values.helpdesk.namespace }}.svc.cluster.local:8118"
+              ADMIN_USER="{{ .Values.helpdesk.admin.username }}"
+              ADMIN_PASS="{{ .Values.helpdesk.admin.password }}"
+              USERNAME="{{ .Values.tenant.username }}"
+              GROUP_NAME="Group ${USERNAME}"
+
+              # --- Step 1: Login as admin ---
+              echo "Logging in as admin..."
+              RESPONSE=$(curl -sf "${HD_URL}/api/v1/login" \
+                -H 'Content-Type: application/json' \
+                -d "{\"username\":\"${ADMIN_USER}\",\"password\":\"${ADMIN_PASS}\"}" 2>/dev/null)
+
+              ACCESS_TOKEN=$(echo "$RESPONSE" | sed -n 's/.*"accessToken":"\([^"]*\)".*/\1/p')
+              if [ -z "$ACCESS_TOKEN" ]; then
+                echo "WARNING: Could not get admin token — Trudesk may be unreachable. Skipping cleanup."
+                exit 0
+              fi
+              echo "Admin login successful."
+
+              # --- Step 2: Delete user ---
+              echo "Deleting user '${USERNAME}'..."
+              curl -s -o /dev/null -X DELETE "${HD_URL}/api/v1/users/${USERNAME}" \
+                -H "accesstoken: ${ACCESS_TOKEN}" 2>/dev/null || echo "WARNING: User deletion returned an error (non-fatal)."
+              echo "User deletion done."
+
+              # --- Step 3: Find and delete group ---
+              echo "Looking up group '${GROUP_NAME}'..."
+              RESPONSE=$(curl -sf "${HD_URL}/api/v1/groups/all" \
+                -H "accesstoken: ${ACCESS_TOKEN}" 2>/dev/null || true)
+
+              GROUP_ID=$(echo "$RESPONSE" | jq -r ".groups[]? | select(.name==\"${GROUP_NAME}\") | ._id" 2>/dev/null)
+
+              if [ -n "$GROUP_ID" ]; then
+                echo "Deleting group '${GROUP_NAME}' (${GROUP_ID})..."
+                curl -s -o /dev/null -X DELETE "${HD_URL}/api/v1/groups/${GROUP_ID}" \
+                  -H "accesstoken: ${ACCESS_TOKEN}" 2>/dev/null || echo "WARNING: Group deletion returned an error (non-fatal)."
+                echo "Group deletion done."
+              else
+                echo "Group '${GROUP_NAME}' not found — nothing to delete."
+              fi
+
+              echo "HelpDesk cleanup complete for ${USERNAME}."
