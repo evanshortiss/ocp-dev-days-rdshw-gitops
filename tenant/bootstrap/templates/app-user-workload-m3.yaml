@@ -11,7 +11,7 @@ metadata:
     - pre-delete-finalizer.argocd.argoproj.io/cleanup
 spec:
   destination:
-    namespace: {{ .Values.argocd.namespace }}
+    namespace: {{ .Release.Namespace }}
     server: https://kubernetes.default.svc
   ignoreDifferences:
     # Build job scales Camel deployments to 0 after creating images, students scale them back up and Argo should not revert
@@ -19,11 +19,6 @@ spec:
       kind: Deployment
       jsonPointers:
         - /spec/replicas
-    # Provisioning job patches per-user API key into HTTPRoute, Argo should not revert
-    - group: gateway.networking.k8s.io
-      kind: HTTPRoute
-      jsonPointers:
-        - /spec/rules/0/filters/1/requestHeaderModifier/set/0/value
   project: default
   source:
     path: tenant/module3
@@ -38,6 +33,9 @@ spec:
           password: {{ .Values.tenant.password }}
         cluster:
           appsDomain: {{ .Values.cluster.subdomain }}
+        litellm:
+          url: {{ .Values.litellm.url }}
+          apiKey: {{ .Values.litellm.apiKey }}
   syncPolicy:
     automated:
       prune: true

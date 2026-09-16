@@ -1,0 +1,71 @@
+kind: ConfigMap
+metadata:
+  name: {{ include "user-workload.name" . }}-skupper-cleanup
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+    argocd.argoproj.io/hook: PreDelete
+    argocd.argoproj.io/hook-delete-policy: HookSucceeded,BeforeHookCreation
+apiVersion: v1
+data:
+  playbook.yaml: |
+    ---
+    - name: Skupper cleanup for {{ .Values.tenant.username }}
+      hosts: localhost
+      gather_facts: false
+      vars:
+        tenant_username: {{ .Values.tenant.username }}
+        user_namespace: {{ include "user-workload.namespace" . | quote }}
+        db_namespace: {{ .Values.sharedDatabase.namespace | quote }}
+      tasks:
+        - name: Delete Skupper Sites
+          kubernetes.core.k8s:
+            api_version: skupper.io/v2alpha1
+            kind: Site
+            namespace: "{{ '{{' }} user_namespace {{ '}}' }}"
+            state: absent
+          ignore_errors: true
+
+        - name: Delete Skupper AccessGrants
+          kubernetes.core.k8s:
+            api_version: skupper.io/v2alpha1
+            kind: AccessGrant
+            namespace: "{{ '{{' }} user_namespace {{ '}}' }}"
+            state: absent
+          ignore_errors: true
+
+        - name: Delete Skupper Listeners
+          kubernetes.core.k8s:
+            api_version: skupper.io/v2alpha1
+            kind: Listener
+            namespace: "{{ '{{' }} user_namespace {{ '}}' }}"
+            state: absent
+          ignore_errors: true
+
+        - name: Delete Skupper Links in DB namespace
+          kubernetes.core.k8s:
+            api_version: skupper.io/v2alpha1
+            kind: Link
+            namespace: "{{ '{{' }} db_namespace {{ '}}' }}"
+            label_selectors:
+              - app.kubernetes.io/part-of={{ '{{' }} tenant_username {{ '}}' }}
+            state: absent
+          ignore_errors: true
+
+        - name: Delete Skupper AccessTokens in DB namespace
+          kubernetes.core.k8s:
+            api_version: skupper.io/v2alpha1
+            kind: AccessToken
+            namespace: "{{ '{{' }} db_namespace {{ '}}' }}"
+            label_selectors:
+              - app.kubernetes.io/part-of={{ '{{' }} tenant_username {{ '}}' }}
+            state: absent
+          ignore_errors: true
+
+        - name: Delete token Secret in DB namespace
+          kubernetes.core.k8s:
+            api_version: v1
+            kind: Secret
+            name: "token-{{ '{{' }} tenant_username {{ '}}' }}"
+            namespace: "{{ '{{' }} db_namespace {{ '}}' }}"
+            state: absent
+          ignore_errors: true

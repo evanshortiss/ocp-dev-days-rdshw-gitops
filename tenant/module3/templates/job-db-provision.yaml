@@ -1,0 +1,39 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: db-provision-{{ .Values.tenant.username }}
+  labels:
+    {{- include "user-workload.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: HookSucceeded,BeforeHookCreation
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  backoffLimit: 10
+  template:
+    spec:
+      serviceAccountName: {{ include "user-workload.name" . }}-provision
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: db-provision
+          image: quay.io/agnosticd/ee-multicloud:latest
+          command:
+            - /bin/bash
+            - -c
+            - ansible-playbook /scripts/playbook.yaml
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+      volumes:
+        - name: scripts
+          configMap:
+            name: {{ include "user-workload.name" . }}-db-provision

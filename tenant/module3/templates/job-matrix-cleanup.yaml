@@ -1,0 +1,38 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: matrix-cleanup-{{ .Values.tenant.username }}
+  labels:
+    {{- include "user-workload.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/hook: PreDelete
+    argocd.argoproj.io/hook-delete-policy: HookSucceeded,BeforeHookCreation
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      serviceAccountName: {{ include "user-workload.name" . }}-cleanup
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: matrix-cleanup
+          image: quay.io/agnosticd/ee-multicloud:latest
+          command:
+            - /bin/bash
+            - -c
+            - ansible-playbook /scripts/playbook.yaml
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+      volumes:
+        - name: scripts
+          configMap:
+            name: {{ include "user-workload.name" . }}-matrix-cleanup

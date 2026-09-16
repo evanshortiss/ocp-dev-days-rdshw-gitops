@@ -1,0 +1,177 @@
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: lab-config
+  namespace: {{ include "user-workload.namespace" . }}
+  labels:
+    {{- include "user-workload.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+    argocd.argoproj.io/sync-wave: "3"
+spec:
+  refreshInterval: 5m
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: vault-secret-store
+  data:
+    # Database
+    - secretKey: db_username
+      remoteRef:
+        key: secrets/tenants/{{ .Values.tenant.username }}/database
+        property: username
+    - secretKey: db_password
+      remoteRef:
+        key: secrets/tenants/{{ .Values.tenant.username }}/database
+        property: password
+    - secretKey: db_host
+      remoteRef:
+        key: secrets/tenants/{{ .Values.tenant.username }}/database
+        property: host
+    - secretKey: db_port
+      remoteRef:
+        key: secrets/tenants/{{ .Values.tenant.username }}/database
+        property: port
+    - secretKey: db_database
+      remoteRef:
+        key: secrets/tenants/{{ .Values.tenant.username }}/database
+        property: database
+    - secretKey: db_schema
+      remoteRef:
+        key: secrets/tenants/{{ .Values.tenant.username }}/database
+        property: schema
+
+    # Matrix
+    - secretKey: matrix_token
+      remoteRef:
+        key: secrets/tenants/{{ .Values.tenant.username }}/matrix
+        property: token
+    - secretKey: matrix_room
+      remoteRef:
+        key: secrets/tenants/{{ .Values.tenant.username }}/matrix
+        property: room
+
+    # RocketChat
+    - secretKey: rocketchat_userid
+      remoteRef:
+        key: secrets/tenants/{{ .Values.tenant.username }}/rocketchat
+        property: userId
+    - secretKey: rocketchat_token
+      remoteRef:
+        key: secrets/tenants/{{ .Values.tenant.username }}/rocketchat
+        property: token
+
+    # Helpdesk
+    - secretKey: helpdesk_username
+      remoteRef:
+        key: secrets/tenants/{{ .Values.tenant.username }}/helpdesk
+        property: username
+    - secretKey: helpdesk_password
+      remoteRef:
+        key: secrets/tenants/{{ .Values.tenant.username }}/helpdesk
+        property: password
+    - secretKey: helpdesk_group_id
+      remoteRef:
+        key: secrets/tenants/{{ .Values.tenant.username }}/helpdesk
+        property: groupId
+    - secretKey: helpdesk_type_id_issue
+      remoteRef:
+        key: secrets/tenants/{{ .Values.tenant.username }}/helpdesk
+        property: typeIdIssue
+    - secretKey: helpdesk_priority_id_normal
+      remoteRef:
+        key: secrets/tenants/{{ .Values.tenant.username }}/helpdesk
+        property: priorityIdNormal
+
+    # S3
+    - secretKey: s3_access_key
+      remoteRef:
+        key: secrets/s3/noobaa
+        property: accessKey
+    - secretKey: s3_secret_key
+      remoteRef:
+        key: secrets/s3/noobaa
+        property: secretKey
+    - secretKey: s3_endpoint
+      remoteRef:
+        key: secrets/s3/noobaa
+        property: endpoint
+
+    # MaaS
+    - secretKey: maas_key
+      remoteRef:
+        key: secrets/litellm/credentials
+        property: api_key
+    - secretKey: maas_url
+      remoteRef:
+        key: secrets/litellm/credentials
+        property: base_url
+
+    # Kuadrant
+    - secretKey: kuadrant_silver_api_key
+      remoteRef:
+        key: secrets/tenants/{{ .Values.tenant.username }}/kuadrant
+        property: silver_api_key
+    - secretKey: kuadrant_gold_api_key
+      remoteRef:
+        key: secrets/tenants/{{ .Values.tenant.username }}/kuadrant
+        property: gold_api_key
+
+  target:
+    name: lab-config
+    creationPolicy: Owner
+    template:
+      engineVersion: v2
+      data:
+        config: |
+          # Helpdesk (per-user)
+          helpdesk_username={{ "{{ .helpdesk_username }}" }}
+          helpdesk_password={{ "{{ .helpdesk_password }}" }}
+          helpdesk_group_id={{ "{{ .helpdesk_group_id }}" }}
+
+          # Helpdesk (shared)
+          helpdesk_url=https://helpdesk-{{ .Values.helpdesk.namespace }}.{{ .Values.cluster.appsDomain }}
+          helpdesk_type_id_issue={{ "{{ .helpdesk_type_id_issue }}" }}
+          helpdesk_priority_id_normal={{ "{{ .helpdesk_priority_id_normal }}" }}
+
+          # Database (per-user)
+          db_username={{ "{{ .db_username }}" }}
+          db_password={{ "{{ .db_password }}" }}
+          db_host={{ "{{ .db_host }}" }}
+          db_port={{ "{{ .db_port }}" }}
+          db_database={{ "{{ .db_database }}" }}
+          db_schema={{ "{{ .db_schema }}" }}
+
+          # RocketChat (per-user)
+          rocketchat_userid={{ "{{ .rocketchat_userid }}" }}
+          rocketchat_token={{ "{{ .rocketchat_token }}" }}
+
+          # Matrix (per-user)
+          matrix_token={{ "{{ .matrix_token }}" }}
+          matrix_room={{ "{{ .matrix_room }}" }}
+
+          # Matrix (shared)
+          matrix_url=https://element-{{ .Values.matrix.namespace }}.{{ .Values.cluster.appsDomain }}
+
+          # S3 (shared)
+          s3_access_key={{ "{{ .s3_access_key }}" }}
+          s3_secret_key={{ "{{ .s3_secret_key }}" }}
+          s3_endpoint={{ "{{ .s3_endpoint }}" }}
+
+          # S3 (per-user)
+          s3_bucket={{ .Values.tenant.username }}
+
+          # MaaS / LLM (shared)
+          maas_url={{ "{{ .maas_url }}" }}
+
+          # MaaS / LLM (per-user)
+          maas_key={{ "{{ .maas_key }}" }}
+
+          # AI Gateway (shared)
+          internal_ai_gateway_url=http://{{ .Values.connectivityLink.aiGateway.gatewayName }}-{{ .Values.connectivityLink.aiGateway.gatewayClassName }}.{{ .Values.connectivityLink.aiGateway.namespace }}.svc.cluster.local
+
+          # AI Gateway (per-user)
+          internal_ai_http_route_url=http://{{ .Values.connectivityLink.aiGateway.gatewayName }}-{{ .Values.connectivityLink.aiGateway.gatewayClassName }}.{{ .Values.connectivityLink.aiGateway.namespace }}.svc.cluster.local/{{ .Values.tenant.username }}/v1
+
+          # Kuadrant API keys (per-user)
+          kuadrant_silver_api_key={{ "{{ .kuadrant_silver_api_key }}" }}
+          kuadrant_gold_api_key={{ "{{ .kuadrant_gold_api_key }}" }}

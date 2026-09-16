@@ -26,7 +26,7 @@ spec:
           requestHeaderModifier:
             set:
               - name: Host
-                value: "pending"
+                value: {{ .Values.litellm.url | quote }}
       backendRefs:
         - group: ""
           kind: Service

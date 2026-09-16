@@ -1,0 +1,134 @@
+kind: ConfigMap
+metadata:
+  name: {{ include "user-workload.name" . }}-rocketchat-cleanup
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+    argocd.argoproj.io/hook: PreDelete
+    argocd.argoproj.io/hook-delete-policy: HookSucceeded,BeforeHookCreation
+apiVersion: v1
+data:
+  playbook.yaml: |
+    ---
+    - name: RocketChat cleanup for {{ .Values.tenant.username }}
+      hosts: localhost
+      gather_facts: false
+      vars:
+        tenant_username: {{ .Values.tenant.username }}
+        rc_url: "http://rocketchat.{{ .Values.rocketchat.namespace }}.svc.cluster.local:3000"
+        rc_admin_user: {{ .Values.rocketchat.admin.username | quote }}
+        rc_admin_pass: {{ .Values.rocketchat.admin.password | quote }}
+        room_name: {{ include "user-workload.roomname" . | quote }}
+        ai_channel: {{ include "user-workload.ai-support-channel" . | quote }}
+      tasks:
+        - name: Admin login
+          ansible.builtin.uri:
+            url: "{{ '{{' }} rc_url {{ '}}' }}/api/v1/login"
+            method: POST
+            body_format: json
+            body:
+              user: "{{ '{{' }} rc_admin_user {{ '}}' }}"
+              password: "{{ '{{' }} rc_admin_pass {{ '}}' }}"
+            validate_certs: false
+          register: r_admin_login
+          ignore_errors: true
+
+        - name: Set admin credentials
+          ansible.builtin.set_fact:
+            admin_id: "{{ '{{' }} r_admin_login.json.data.userId {{ '}}' }}"
+            admin_token: "{{ '{{' }} r_admin_login.json.data.authToken {{ '}}' }}"
+          when: r_admin_login is success
+
+        - name: List webhooks
+          ansible.builtin.uri:
+            url: "{{ '{{' }} rc_url {{ '}}' }}/api/v1/integrations.list"
+            method: GET
+            headers:
+              X-User-Id: "{{ '{{' }} admin_id {{ '}}' }}"
+              X-Auth-Token: "{{ '{{' }} admin_token {{ '}}' }}"
+            validate_certs: false
+          register: r_webhooks
+          when: r_admin_login is success
+          ignore_errors: true
+
+        - name: Delete room webhook
+          ansible.builtin.uri:
+            url: "{{ '{{' }} rc_url {{ '}}' }}/api/v1/integrations.remove"
+            method: POST
+            body_format: json
+            body:
+              integrationId: "{{ '{{' }} item._id {{ '}}' }}"
+              type: webhook-outgoing
+            headers:
+              X-User-Id: "{{ '{{' }} admin_id {{ '}}' }}"
+              X-Auth-Token: "{{ '{{' }} admin_token {{ '}}' }}"
+            status_code: [200, 404]
+            validate_certs: false
+          loop: "{{ '{{' }} r_webhooks.json.integrations | selectattr('name', 'equalto', room_name ~ ' webhook') | list {{ '}}' }}"
+          when:
+            - r_admin_login is success
+            - r_webhooks is success
+          ignore_errors: true
+
+        - name: Delete AI webhook
+          ansible.builtin.uri:
+            url: "{{ '{{' }} rc_url {{ '}}' }}/api/v1/integrations.remove"
+            method: POST
+            body_format: json
+            body:
+              integrationId: "{{ '{{' }} item._id {{ '}}' }}"
+              type: webhook-outgoing
+            headers:
+              X-User-Id: "{{ '{{' }} admin_id {{ '}}' }}"
+              X-Auth-Token: "{{ '{{' }} admin_token {{ '}}' }}"
+            status_code: [200, 404]
+            validate_certs: false
+          loop: "{{ '{{' }} r_webhooks.json.integrations | selectattr('name', 'equalto', ai_channel ~ ' webhook') | list {{ '}}' }}"
+          when:
+            - r_admin_login is success
+            - r_webhooks is success
+          ignore_errors: true
+
+        - name: Delete room channel
+          ansible.builtin.uri:
+            url: "{{ '{{' }} rc_url {{ '}}' }}/api/v1/groups.delete"
+            method: POST
+            body_format: json
+            body:
+              roomName: "{{ '{{' }} room_name {{ '}}' }}"
+            headers:
+              X-User-Id: "{{ '{{' }} admin_id {{ '}}' }}"
+              X-Auth-Token: "{{ '{{' }} admin_token {{ '}}' }}"
+            status_code: [200, 400, 404]
+            validate_certs: false
+          when: r_admin_login is success
+          ignore_errors: true
+
+        - name: Delete AI channel
+          ansible.builtin.uri:
+            url: "{{ '{{' }} rc_url {{ '}}' }}/api/v1/groups.delete"
+            method: POST
+            body_format: json
+            body:
+              roomName: "{{ '{{' }} ai_channel {{ '}}' }}"
+            headers:
+              X-User-Id: "{{ '{{' }} admin_id {{ '}}' }}"
+              X-Auth-Token: "{{ '{{' }} admin_token {{ '}}' }}"
+            status_code: [200, 400, 404]
+            validate_certs: false
+          when: r_admin_login is success
+          ignore_errors: true
+
+        - name: Delete user
+          ansible.builtin.uri:
+            url: "{{ '{{' }} rc_url {{ '}}' }}/api/v1/users.delete"
+            method: POST
+            body_format: json
+            body:
+              username: "{{ '{{' }} tenant_username {{ '}}' }}"
+            headers:
+              X-User-Id: "{{ '{{' }} admin_id {{ '}}' }}"
+              X-Auth-Token: "{{ '{{' }} admin_token {{ '}}' }}"
+            status_code: [200, 404]
+            validate_certs: false
+          when: r_admin_login is success
+          ignore_errors: true

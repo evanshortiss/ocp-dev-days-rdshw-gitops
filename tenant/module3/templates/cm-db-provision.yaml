@@ -1,0 +1,103 @@
+kind: ConfigMap
+metadata:
+  name: {{ include "user-workload.name" . }}-db-provision
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+apiVersion: v1
+data:
+  playbook.yaml: |
+    ---
+    - name: Database provisioning for {{ .Values.tenant.username }}
+      hosts: localhost
+      gather_facts: false
+      vars:
+        tenant_username: {{ .Values.tenant.username }}
+        tenant_password: {{ .Values.tenant.password }}
+        vault_namespace: {{ .Values.vault.namespace }}
+        vault_pod: {{ .Values.vault.name }}-0
+        db_host: "postgres.{{ .Values.sharedDatabase.namespace }}.svc.cluster.local"
+        db_port: "5432"
+        db_name: {{ .Values.sharedDatabase.database | quote }}
+        db_admin: {{ .Values.sharedDatabase.adminUser | quote }}
+        db_admin_pass: {{ .Values.sharedDatabase.adminPassword | quote }}
+      tasks:
+        - name: Create PostgreSQL role
+          community.postgresql.postgresql_user:
+            name: "{{ '{{' }} tenant_username {{ '}}' }}"
+            password: "{{ '{{' }} tenant_password {{ '}}' }}"
+            login_host: "{{ '{{' }} db_host {{ '}}' }}"
+            login_user: "{{ '{{' }} db_admin {{ '}}' }}"
+            login_password: "{{ '{{' }} db_admin_pass {{ '}}' }}"
+            state: present
+
+        - name: Grant role to admin
+          community.postgresql.postgresql_query:
+            login_host: "{{ '{{' }} db_host {{ '}}' }}"
+            login_user: "{{ '{{' }} db_admin {{ '}}' }}"
+            login_password: "{{ '{{' }} db_admin_pass {{ '}}' }}"
+            db: "{{ '{{' }} db_name {{ '}}' }}"
+            query: GRANT {{ '{{' }} tenant_username {{ '}}' }} TO {{ '{{' }} db_admin {{ '}}' }}
+          ignore_errors: true
+
+        - name: Create schema
+          community.postgresql.postgresql_schema:
+            name: "{{ '{{' }} tenant_username {{ '}}' }}"
+            owner: "{{ '{{' }} tenant_username {{ '}}' }}"
+            database: "{{ '{{' }} db_name {{ '}}' }}"
+            login_host: "{{ '{{' }} db_host {{ '}}' }}"
+            login_user: "{{ '{{' }} db_admin {{ '}}' }}"
+            login_password: "{{ '{{' }} db_admin_pass {{ '}}' }}"
+
+        - name: Create invoices table and triggers
+          community.postgresql.postgresql_query:
+            login_host: "{{ '{{' }} db_host {{ '}}' }}"
+            login_user: "{{ '{{' }} db_admin {{ '}}' }}"
+            login_password: "{{ '{{' }} db_admin_pass {{ '}}' }}"
+            db: "{{ '{{' }} db_name {{ '}}' }}"
+            query: |
+              CREATE TABLE IF NOT EXISTS {{ '{{' }} tenant_username {{ '}}' }}.invoices (
+                  id CHARACTER VARYING NOT NULL,
+                  data TEXT NOT NULL,
+                  version INTEGER NOT NULL DEFAULT 0,
+                  PRIMARY KEY (id)
+              );
+
+              CREATE OR REPLACE FUNCTION {{ '{{' }} tenant_username {{ '}}' }}.increment_version()
+              RETURNS TRIGGER AS $$
+              BEGIN
+                  NEW.version := OLD.version + 1;
+                  RETURN NEW;
+              END;
+              $$ LANGUAGE plpgsql;
+
+              DROP TRIGGER IF EXISTS invoices_version_trigger ON {{ '{{' }} tenant_username {{ '}}' }}.invoices;
+              CREATE TRIGGER invoices_version_trigger
+                  BEFORE UPDATE ON {{ '{{' }} tenant_username {{ '}}' }}.invoices
+                  FOR EACH ROW
+                  EXECUTE FUNCTION {{ '{{' }} tenant_username {{ '}}' }}.increment_version();
+
+              ALTER TABLE {{ '{{' }} tenant_username {{ '}}' }}.invoices OWNER TO {{ '{{' }} tenant_username {{ '}}' }};
+              ALTER FUNCTION {{ '{{' }} tenant_username {{ '}}' }}.increment_version() OWNER TO {{ '{{' }} tenant_username {{ '}}' }};
+
+        - name: Insert sample invoice (idempotent)
+          community.postgresql.postgresql_query:
+            login_host: "{{ '{{' }} db_host {{ '}}' }}"
+            login_user: "{{ '{{' }} db_admin {{ '}}' }}"
+            login_password: "{{ '{{' }} db_admin_pass {{ '}}' }}"
+            db: "{{ '{{' }} db_name {{ '}}' }}"
+            query: |
+              INSERT INTO {{ '{{' }} tenant_username {{ '}}' }}.invoices (id, data) VALUES ('61356291', '<Invoice><InvoiceNumber>61356291</InvoiceNumber><DateOfIssue>20120906</DateOfIssue><Seller><Name>Rodriguez-Stevens</Name></Seller></Invoice>')
+              ON CONFLICT (id) DO NOTHING
+
+        - name: Write credentials to Vault
+          kubernetes.core.k8s_exec:
+            namespace: "{{ '{{' }} vault_namespace {{ '}}' }}"
+            pod: "{{ '{{' }} vault_pod {{ '}}' }}"
+            command: >
+              vault kv put kv/secrets/tenants/{{ '{{' }} tenant_username {{ '}}' }}/database
+              username="{{ '{{' }} tenant_username {{ '}}' }}"
+              password="{{ '{{' }} tenant_password {{ '}}' }}"
+              host="{{ '{{' }} db_host {{ '}}' }}"
+              port="{{ '{{' }} db_port {{ '}}' }}"
+              database="{{ '{{' }} db_name {{ '}}' }}"
+              schema="{{ '{{' }} tenant_username {{ '}}' }}"

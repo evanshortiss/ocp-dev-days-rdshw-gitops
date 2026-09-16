@@ -46,6 +46,14 @@ sharedDatabase:
 admin:
   namespace: admin-m3
 
+vault:
+  name: vault
+  namespace: vault
+
+litellm:
+  url: ""
+  apiKey: ""
+
 cluster:
   appsDomain: ""
 

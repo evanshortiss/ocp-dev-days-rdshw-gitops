@@ -1,0 +1,57 @@
+kind: ConfigMap
+metadata:
+  name: {{ include "user-workload.name" . }}-s3-provision
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+apiVersion: v1
+data:
+  playbook.yaml: |
+    ---
+    - name: S3 provisioning for {{ .Values.tenant.username }}
+      hosts: localhost
+      gather_facts: false
+      vars:
+        tenant_username: {{ .Values.tenant.username }}
+        vault_namespace: {{ .Values.vault.namespace }}
+        vault_pod: {{ .Values.vault.name }}-0
+        bucket_name: "{{ .Values.tenant.username }}"
+        invoice_url: "https://raw.githubusercontent.com/redhat-gpte-devopsautomation/agnosticv-operator/main/roles/agnosticv_deployer/files/invoice.pdf"
+      tasks:
+        - name: Read S3 credentials from Vault
+          kubernetes.core.k8s_exec:
+            namespace: "{{ '{{' }} vault_namespace {{ '}}' }}"
+            pod: "{{ '{{' }} vault_pod {{ '}}' }}"
+            command: vault kv get -format=json kv/secrets/s3/noobaa
+          register: r_vault_s3
+
+        - name: Parse S3 credentials
+          ansible.builtin.set_fact:
+            s3_access_key: "{{ '{{' }} (r_vault_s3.stdout | from_json).data.data.accessKey {{ '}}' }}"
+            s3_secret_key: "{{ '{{' }} (r_vault_s3.stdout | from_json).data.data.secretKey {{ '}}' }}"
+            s3_endpoint: "{{ '{{' }} (r_vault_s3.stdout | from_json).data.data.endpoint {{ '}}' }}"
+
+        - name: Create S3 bucket
+          amazon.aws.s3_bucket:
+            name: "{{ '{{' }} bucket_name {{ '}}' }}"
+            state: present
+            aws_access_key: "{{ '{{' }} s3_access_key {{ '}}' }}"
+            aws_secret_key: "{{ '{{' }} s3_secret_key {{ '}}' }}"
+            endpoint_url: "{{ '{{' }} s3_endpoint {{ '}}' }}"
+            validate_certs: false
+
+        - name: Download invoice file
+          ansible.builtin.get_url:
+            url: "{{ '{{' }} invoice_url {{ '}}' }}"
+            dest: /tmp/invoice.pdf
+            mode: '0644'
+
+        - name: Upload invoice to S3
+          amazon.aws.s3_object:
+            bucket: "{{ '{{' }} bucket_name {{ '}}' }}"
+            object: invoice.pdf
+            src: /tmp/invoice.pdf
+            mode: put
+            aws_access_key: "{{ '{{' }} s3_access_key {{ '}}' }}"
+            aws_secret_key: "{{ '{{' }} s3_secret_key {{ '}}' }}"
+            endpoint_url: "{{ '{{' }} s3_endpoint {{ '}}' }}"
+            validate_certs: false
