@@ -1,8 +1,0 @@
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: {{ include "user-workload.name" . }}-cleanup
-  annotations:
-    argocd.argoproj.io/sync-wave: "-2"
-    argocd.argoproj.io/hook: PreDelete
-    argocd.argoproj.io/hook-delete-policy: HookSucceeded,BeforeHookCreation

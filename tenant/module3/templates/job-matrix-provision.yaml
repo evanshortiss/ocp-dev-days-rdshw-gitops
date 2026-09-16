@@ -11,7 +11,7 @@ spec:
   backoffLimit: 10
   template:
     spec:
-      serviceAccountName: {{ include "user-workload.name" . }}-provision
+      serviceAccountName: tenant-{{ .Values.tenant.username }}
       restartPolicy: Never
       securityContext:
         runAsNonRoot: true

@@ -12,7 +12,7 @@ spec:
   backoffLimit: 3
   template:
     spec:
-      serviceAccountName: {{ include "user-workload.name" . }}-cleanup
+      serviceAccountName: tenant-{{ .Values.tenant.username }}
       restartPolicy: Never
       securityContext:
         runAsNonRoot: true
