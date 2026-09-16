@@ -141,32 +141,12 @@ spec:
               PRIORITY_ID_NORMAL=$(echo "$RESPONSE" | jq -r '.[]? | select(.name=="Issue") | .priorities[]? | select(.name=="Normal") | ._id' 2>/dev/null)
               echo "Type ID (Issue): ${TYPE_ID_ISSUE}, Priority ID (Normal): ${PRIORITY_ID_NORMAL}"
 
-              # --- Step 7: Store credentials in lab-credentials Secret ---
-              echo "Storing HelpDesk credentials..."
-              SA_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
-              NAMESPACE="{{ include "user-workload.namespace" . }}"
-              JSON_DATA=$(jq -n --indent 2 \
-                --arg gid "$GROUP_ID" \
-                --arg tid "$TYPE_ID_ISSUE" \
-                --arg pid "$PRIORITY_ID_NORMAL" \
-                --arg user "$USERNAME" \
-                --arg pass "$USER_PASS" \
-                '{groupId: $gid, typeIdIssue: $tid, priorityIdNormal: $pid, username: $user, password: $pass}')
-              B64_DATA=$(printf '%s' "$JSON_DATA" | base64 | tr -d '\n')
-              HTTP_CODE=$(curl -sSk -o /dev/null -w "%{http_code}" -X PATCH \
-                "https://kubernetes.default.svc/api/v1/namespaces/${NAMESPACE}/secrets/lab-credentials" \
-                -H "Authorization: Bearer ${SA_TOKEN}" \
-                -H "Content-Type: application/merge-patch+json" \
-                -d '{"data":{"helpdesk.json":"'"${B64_DATA}"'"}}')
-              if [ "$HTTP_CODE" = "200" ]; then
-                echo "HelpDesk credentials stored."
-              else
-                echo "WARNING: Failed to store credentials (HTTP ${HTTP_CODE})"
-              fi
+              # --- Step 7: Write credentials to Vault ---
+              echo "Writing HelpDesk credentials to Vault..."
+              VAULT_NAMESPACE="{{ .Values.vault.namespace }}"
+              VAULT_POD="{{ .Values.vault.name }}-0"
 
-
-              # Write to Vault
-              kubectl exec -n "{{ .Values.vault.namespace }}" "{{ .Values.vault.name }}-0" -- \
+              kubectl exec -n "${VAULT_NAMESPACE}" "${VAULT_POD}" -- \
                 vault kv put kv/secrets/tenants/${USERNAME}/helpdesk \
                   username="${USERNAME}" \
                   password="${USER_PASS}" \
